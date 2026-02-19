@@ -1,0 +1,6 @@
+pandas==2.2.3
+fastapi==0.115
+uvicorn==0.34.0
+sqlalchemy==2.0.46
+python-dotenv==1.2.1
+psycopg2==2.9.11
