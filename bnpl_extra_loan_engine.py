@@ -73,11 +73,36 @@ def text(v: Any) -> str:
     return DASH if v in (None, "") else str(v).replace("_", " ").capitalize()
 
 
-def reasons_frame(reasons: list) -> pd.DataFrame:
-    """Normalise reasons that may be strings or dicts into a tidy table."""
-    if all(isinstance(r, Mapping) for r in reasons):
-        return pd.DataFrame(reasons)
-    return pd.DataFrame({"Reason": [str(r) for r in reasons]})
+def _cell(v: Any) -> str:
+    """Render one reason field as text (keeps st.dataframe Arrow-safe)."""
+    if v is None:
+        return DASH
+    if isinstance(v, float):
+        return number(v, decimals=4)
+    if isinstance(v, (dict, list, tuple)):
+        return json.dumps(v, default=str)
+    return str(v)
+
+
+def reasons_frame(reasons: list[dict]) -> pd.DataFrame:
+    """`ineligibility_reasons` is a list of dicts (empty when eligible)."""
+    df = pd.DataFrame(reasons)
+    print(df.columns)
+    df.columns = [str(c).replace("_", " ").capitalize() for c in df.columns]
+    return df.map(_cell).fillna(DASH)
+
+def show_reasons(reasons: list[dict], status: Any) -> None:
+    st.subheader("Ineligibility reasons")
+    if reasons:
+        st.dataframe(reasons_frame(reasons), width="stretch", hide_index=True)
+    elif _is_ineligible(status):
+        st.caption("The engine returned an ineligible status without any reasons.")
+    else:
+        st.caption("None — the applicant passed all eligibility checks.")
+
+
+def _is_ineligible(status: Any) -> bool:
+    return isinstance(status, str) and status.strip().lower() == "ineligible"
 
 
 def lookup_tenor(offers: Mapping | None, tenor: Any) -> Any:
@@ -100,12 +125,11 @@ def tenor_sort_key(t: Any) -> tuple[int, Any]:
         return (1, str(t))
 
 
-def status_banner(status: Any, has_reasons: bool) -> None:
+def status_banner(status: Any) -> None:
     if status is None:
         st.warning("**Status: Unavailable** — the engine returned no status.")
-    elif status == "ineligible":
-        suffix = " — see reasons below." if has_reasons else "."
-        st.error(f"**Status: Ineligible**{suffix}")
+    elif _is_ineligible(status):
+        st.error(f"**Status: Ineligible**")
     else:
         st.success(f"**Status: {text(status)}**")
 
@@ -236,8 +260,7 @@ if ENGINE_ERROR:
 if run:
     with st.spinner("Running decision pipeline…"):
         try:
-            # Set on the instance, not the class, so concurrent sessions don't
-            # leak this flag into each other's runs.
+
             params = OptionalParams()
             params.BNPL_SELF_EMPLOYED_ENABLED = self_employed_enabled
             engine = QuickLoan(
@@ -268,8 +291,8 @@ if st.session_state.get("inputs_fp") != inputs_fp:
 
 extra: dict = results.get("extra_cash") or {}
 bnpl: dict = results.get("bnpl") or {}
-extra_cash_reasons: list = extra.get("ineligibility_reasons") or []
-bnpl_reasons: list = bnpl.get("ineligibility_reasons") or []
+extra_cash_reasons: list[dict] = extra.get("ineligibility_reasons") or []
+bnpl_reasons: list[dict] = bnpl.get("ineligibility_reasons") or []
 bnpl_offers: dict = bnpl.get("credit_limits") or {}
 
 # ------------------------------------------------------------------ headline row
@@ -278,8 +301,6 @@ customer_type = extra.get("customer_type")
 salary = _num(extra.get("salary"))
 inflow_median = _num(extra.get("inflow_median"))
 
-# Salaried: declared salary. Otherwise (or if salary is missing): weekly inflow
-# median x 4 as a monthly proxy.
 if customer_type == "salaried" and salary is not None:
     monthly_income = salary
 else:
@@ -320,6 +341,8 @@ with tab_cash:
         label = LABELS.get(key, key.replace("_", " ").capitalize())
         if key == "salary":
             value = "••••" if v is not None else DASH  # masked: PII
+        elif isinstance(v, bool):
+            value = "Yes" if v else "No"
         elif key in MONEY:
             value = naira(v)
         elif key in RATES:
@@ -332,39 +355,39 @@ with tab_cash:
 # ------------------------------------------------------------------- decision
 
 with tab_dec:
-    status_banner(extra.get("status"), bool(extra_cash_reasons))
-    if extra_cash_reasons:
-        st.subheader("Ineligibility reasons")
-        st.dataframe(reasons_frame(extra_cash_reasons), width="stretch", hide_index=True)
+    status_banner(extra.get("status"))
 
-    max_tenor = extra.get("max_tenor")
+    principal = _num(extra.get("principal_offer"))
+    max_yield = _num(extra.get("max_yield"))
+    total_repayable = principal + max_yield if principal is not None and max_yield is not None else None
+    pricing = _num(extra.get("pricing"))
+    tenor_days = _num(extra.get("max_tenor"))
     st.dataframe(
         pd.DataFrame([
             {"Field": "Status", "Value": text(extra.get("status"))},
             {"Field": "Customer type", "Value": text(customer_type)},
             {"Field": "Risk band", "Value": extra.get("risk_band") or DASH},
             {"Field": "Risk score", "Value": integer(extra.get("risk_score"))},
-            {"Field": "Pricing", "Value": extra.get("pricing") if extra.get("pricing") is not None else DASH},
-            {"Field": "Max tenor", "Value": DASH if max_tenor is None else str(max_tenor)},
-            {"Field": "Principal offer", "Value": naira(extra.get("principal_offer"))},
-            {"Field": "Installment", "Value": naira(extra.get("installment"))},
-            {"Field": "Max yield", "Value": number(extra.get("max_yield"))},
-            {"Field": "Bureau score", "Value": DASH if extra.get("credit_score") is None
-                                                else str(extra.get("credit_score"))},
-        ]).astype(str),
+            {"Field": "Bureau score", "Value": integer(extra.get("credit_score"))},
+            {"Field": "Daily rate (flat)", "Value": DASH if pricing is None else f"{pricing:.2%} per day"},
+            {"Field": "Max tenor", "Value": DASH if tenor_days is None else f"{tenor_days:,.0f} days"},
+            {"Field": "Principal offer", "Value": naira(principal)},
+            {"Field": "Interest at max tenor", "Value": naira(max_yield)},
+            {"Field": "Total repayable", "Value": naira(total_repayable)},
+            {"Field": "Daily installment", "Value": naira(extra.get("installment"))},
+        ]),
         width="stretch", hide_index=True,
     )
+    if extra_cash_reasons:
+        show_reasons(extra_cash_reasons, extra.get("status"))
 
 # ----------------------------------------------------------------------- BNPL
 
 with tab_bnpl:
-    status_banner(bnpl.get("status"), bool(bnpl_reasons))
-    if bnpl_reasons:
-        st.subheader("Ineligibility reasons")
-        st.dataframe(reasons_frame(bnpl_reasons), width="stretch", hide_index=True)
+    status_banner(bnpl.get("status"))
 
     if not bnpl_offers:
-        st.info("No BNPL credit limits were returned for this applicant.")
+        show_reasons(bnpl_reasons, bnpl.get("status"))
     else:
         st.subheader("BNPL credit limits")
         st.dataframe(
@@ -426,7 +449,7 @@ with tab_bnpl:
                         f"+ **{naira(extra_dp)} additional**, because only "
                         f"{naira(credit_limit)} can be financed at this tenor."
                     )
-
+    
 # ------------------------------------------------------------------ raw output
 
 with tab_raw:
