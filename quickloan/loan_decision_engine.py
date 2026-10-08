@@ -208,14 +208,14 @@ class QuickLoan:
         return final_result
 
     # ---------------------------------------------------------------- BNPL
-    def bnpl_quote(self,asset_name, tenor, product_price,credit_limit) -> dict:
+    def bnpl_quote(self,asset_name, tenor, product_price,credit_limit,env='dev') -> dict:
         """Price known. Job: the actual plan."""
 
         # validate inputs
         tenor = str(tenor)
-        n = validate_input(asset_name, tenor, product_price, credit_limit)
+        n = validate_input(asset_name, tenor, product_price, credit_limit, env=env)
 
-        rac = ITEM_SCHEDULE[asset_name][tenor]
+        rac = ITEM_SCHEDULE.get(env, 'dev').get(asset_name, {}).get(tenor)
 
         f, d = rac["tenor_fee"], rac["down_payment"]
 
@@ -253,7 +253,7 @@ def validate_input(asset_name, tenor, price, credit_limit, env='dev') -> str:
             "You do not have enough credit limit to purchase this item.",
         )
 
-    item_schedule = ITEM_SCHEDULE.get(env, 'dev')
+    item_schedule = ITEM_SCHEDULE.get(env)
 
     if asset_name not in item_schedule:
         raise BNPLError(
