@@ -113,10 +113,11 @@ class QuickLoan:
         extra_cash = dict.fromkeys(EXTRA_CASH_FIELDS, None)
         extra_cash["customer_type"] = "unknown"
         extra_cash["status"] = "ineligible"
+        extra_cash["ineligibility_reasons"] = reasons
+        bnpl = {"status": "ineligible", "credit_limits": {}, "ineligibility_reasons": reasons}
         return {
             "extra_cash": extra_cash,
-            "bnpl":{},
-            "ineligibility_reasons": reasons,
+            "bnpl": bnpl,
         }
 
     def _reject(self, code: str, message: str) -> dict:
@@ -178,13 +179,13 @@ class QuickLoan:
             )
 
         if self.score.total_score < self.params.MIN_CREDIT_SCORE:
-                    self.reasons.append(
+            self.reasons.append(
                         {
                             'reason_code': 'LOW_CREDIT_SCORE',
                             'reason_message': f'Credit score {self.score.total_score} is below the minimum threshold of {self.params.MIN_CREDIT_SCORE}'
                         }
                     )
-                    return self._empty_result(self.reasons)
+            return self._empty_result(self.reasons)
 
         if not self._qualify():
             return self._empty_result(self.reasons)
